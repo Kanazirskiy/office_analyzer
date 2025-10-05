@@ -65,8 +65,6 @@ const char *patterns[] = {
 };
 const size_t patterns_count = sizeof(patterns)/sizeof(patterns[0]);
 
-/*-------------------------------------*/
-/* Вспомогательные функции */
 int is_whitelisted(const char *s) {
     if (!s) return 0;
     for (size_t i = 0; i < whitelist_count; ++i) {
@@ -100,7 +98,6 @@ char *zip_read_file(zip_t *za, int index, size_t *size_out) {
 }
 
 /*-------------------------------------*/
-/* UI: список файлов */
 static void ui_draw_file_list(void) {
     clear();
     mvprintw(0, 0, "Files in archive (ESC/q to exit, s to open tags, -> to watch file content)");
@@ -133,18 +130,21 @@ void remove_xml_content(wchar_t **lines, int line_count) {
     }
 }
 
-/*-------------------------------------*/
-/* Отображение содержимого файла */
 static void show_file_contents(zip_t *za, int index) {
     size_t size;
     char *buf = zip_read_file(za, index, &size);
     if (!buf) return;
 
+    // Конвертация в wchar_t
     wchar_t *wbuf = malloc((size + 1) * sizeof(wchar_t));
-    if (!wbuf) { free(buf); return; }
+    if (!wbuf) {
+        free(buf);
+        return;
+    }
     mbstowcs(wbuf, buf, size + 1);
     free(buf);
 
+    // Разбивка на строки
     wchar_t **lines = malloc(MAX_LINES * sizeof(wchar_t*));
     int line_count = 0;
     wchar_t *p = wbuf;
@@ -156,34 +156,39 @@ static void show_file_contents(zip_t *za, int index) {
         p = next + 1;
     }
 
+    // Сохраняем оригинальные строки
     wchar_t **original_lines = malloc(line_count * sizeof(wchar_t*));
-    for (int i = 0; i < line_count; i++) {
+    for (int i = 0; i < line_count; i++)
         original_lines[i] = wcsdup(lines[i]);
-    }
 
     bool tags_cleared = false;
     int top_line = 0, cursor_line = 0, cursor_col = 0, ch;
-    int screen_lines = LINES - 1;
+    int screen_lines = LINES - 1; // 0-я строка для заголовка
+
+    curs_set(1); // Видимый яркий курсор
 
     do {
-        clear();
+        // Отрисовка заголовка
         mvprintw(0, 0, "File: %s (ESC/q to return, CTRL+t to delete text between tags)", file_names[index]);
+        // Очистка текстовой области
+        for (int r = 1; r <= screen_lines; r++) {
+            move(r, 0);
+            clrtoeol();
+        }
 
-        int screen_row = 0;
-        int total_lines = 0;
-        curs_set(1);
+        // Отрисовка видимых строк
+        int screen_row = 0;   // реальная строка на экране
+        int total_lines = 0;  // логическая строка + куски
         for (int l = 0; l < line_count; l++) {
             wchar_t *line = lines[l];
             int len = wcslen(line);
+
             for (int start = 0; start < len; start += COLS) {
                 if (total_lines >= top_line && screen_row < screen_lines) {
                     int chunk = (start + COLS <= len) ? COLS : len - start;
+
                     for (int j = 0; j < chunk; j++) {
-                        if (screen_row == cursor_line && j + start == cursor_col)
-                            attron(A_REVERSE);
                         mvaddnwstr(screen_row + 1, j, &line[start + j], 1);
-                        if (screen_row == cursor_line && j + start == cursor_col)
-                            attroff(A_REVERSE);
                     }
                     screen_row++;
                 }
@@ -191,29 +196,46 @@ static void show_file_contents(zip_t *za, int index) {
             }
         }
 
-        move(cursor_line + 1, cursor_col % COLS);
+        if (cursor_line + top_line >= total_lines) {
+            if (total_lines > 0) cursor_line = total_lines - top_line - 1;
+            else cursor_line = 0;
+        }
+        // Перемещаем курсор
+        move(cursor_line +1, cursor_col % COLS);
         refresh();
-        ch = getch();
 
-        switch(ch) {
-            case KEY_DOWN: cursor_line++; if (cursor_line >= screen_lines) { cursor_line = screen_lines - 1; top_line++; } break;
-            case KEY_UP: if (cursor_line > 0) cursor_line--; else if (top_line > 0) top_line--; break;
-            case KEY_RIGHT: cursor_col++; break;
-            case KEY_LEFT: if (cursor_col > 0) cursor_col--; break;
+        ch = getch();
+        switch (ch) {
+            case KEY_DOWN:
+                if (cursor_line < screen_lines - 1) cursor_line++;
+                else top_line++;
+                break;
+            case KEY_UP:
+                if (cursor_line > 0) cursor_line--;
+                else if (top_line > 0) top_line--;
+                break;
+            case KEY_RIGHT:
+                cursor_col++;
+                break;
+            case KEY_LEFT:
+                if (cursor_col > 0) cursor_col--;
+                break;
             case CTRL('t'):
                 if (!tags_cleared) {
                     remove_xml_content(lines, line_count);
                     tags_cleared = true;
                 } else {
-                    for (int i = 0; i < line_count; i++) wcscpy(lines[i], original_lines[i]);
+                    for (int i = 0; i < line_count; i++)
+                        wcscpy(lines[i], original_lines[i]);
                     tags_cleared = false;
                 }
                 cursor_line = cursor_col = top_line = 0;
                 break;
         }
 
-    } while(ch != KEY_ESC && ch != 'q');
+    } while (ch != KEY_ESC && ch != 'q');
 
+    // Освобождение памяти
     for (int i = 0; i < line_count; i++) free(original_lines[i]);
     free(original_lines);
     free(lines);
