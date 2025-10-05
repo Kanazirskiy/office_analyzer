@@ -148,6 +148,7 @@ static void show_file_contents(zip_t *za, int index) {
     wchar_t **lines = malloc(MAX_LINES * sizeof(wchar_t*));
     int line_count = 0;
     wchar_t *p = wbuf;
+
     while (*p && line_count < MAX_LINES) {
         lines[line_count++] = p;
         wchar_t *next = wcschr(p, L'\n');
@@ -164,12 +165,14 @@ static void show_file_contents(zip_t *za, int index) {
     bool tags_cleared = false;
     int top_line = 0, cursor_line = 0, cursor_col = 0, ch;
     int screen_lines = LINES - 1; // 0-я строка для заголовка
-
+    erase();
     curs_set(1); // Видимый яркий курсор
 
     do {
         // Отрисовка заголовка
-        mvprintw(0, 0, "File: %s (ESC/q to return, CTRL+t to delete text between tags)", file_names[index]);
+        mvprintw(0, 0, "File: %s (ESC/q to return, CTRL+t to delete text between tags)",
+                 file_names[index]);
+
         // Очистка текстовой области
         for (int r = 1; r <= screen_lines; r++) {
             move(r, 0);
@@ -179,6 +182,7 @@ static void show_file_contents(zip_t *za, int index) {
         // Отрисовка видимых строк
         int screen_row = 0;   // реальная строка на экране
         int total_lines = 0;  // логическая строка + куски
+
         for (int l = 0; l < line_count; l++) {
             wchar_t *line = lines[l];
             int len = wcslen(line);
@@ -186,7 +190,6 @@ static void show_file_contents(zip_t *za, int index) {
             for (int start = 0; start < len; start += COLS) {
                 if (total_lines >= top_line && screen_row < screen_lines) {
                     int chunk = (start + COLS <= len) ? COLS : len - start;
-
                     for (int j = 0; j < chunk; j++) {
                         mvaddnwstr(screen_row + 1, j, &line[start + j], 1);
                     }
@@ -196,30 +199,43 @@ static void show_file_contents(zip_t *za, int index) {
             }
         }
 
+        // Ограничение позиции курсора
         if (cursor_line + top_line >= total_lines) {
-            if (total_lines > 0) cursor_line = total_lines - top_line - 1;
-            else cursor_line = 0;
+            if (total_lines > 0)
+                cursor_line = total_lines - top_line - 1;
+            else
+                cursor_line = 0;
         }
+
         // Перемещаем курсор
-        move(cursor_line +1, cursor_col % COLS);
+        move(cursor_line + 1, cursor_col % COLS);
         refresh();
 
         ch = getch();
+
         switch (ch) {
             case KEY_DOWN:
-                if (cursor_line < screen_lines - 1) cursor_line++;
-                else top_line++;
+                if (cursor_line < screen_lines - 1)
+                    cursor_line++;
+                else
+                    top_line++;
                 break;
+
             case KEY_UP:
-                if (cursor_line > 0) cursor_line--;
-                else if (top_line > 0) top_line--;
+                if (cursor_line > 0)
+                    cursor_line--;
+                else if (top_line > 0)
+                    top_line--;
                 break;
+
             case KEY_RIGHT:
                 cursor_col++;
                 break;
+
             case KEY_LEFT:
                 if (cursor_col > 0) cursor_col--;
                 break;
+
             case CTRL('t'):
                 if (!tags_cleared) {
                     remove_xml_content(lines, line_count);
@@ -229,18 +245,19 @@ static void show_file_contents(zip_t *za, int index) {
                         wcscpy(lines[i], original_lines[i]);
                     tags_cleared = false;
                 }
-                cursor_line = cursor_col = top_line = 0;
                 break;
         }
 
     } while (ch != KEY_ESC && ch != 'q');
 
     // Освобождение памяти
-    for (int i = 0; i < line_count; i++) free(original_lines[i]);
+    for (int i = 0; i < line_count; i++)
+        free(original_lines[i]);
     free(original_lines);
     free(lines);
     free(wbuf);
 }
+
 
 static void add_match(char ***matches, size_t *match_count, size_t max_matches, const char *match) {
     if (*match_count >= max_matches) return;
@@ -438,8 +455,17 @@ static void display_matches_with_filter(char **matches, size_t match_count) {
     int ch;
 
     do {
-        clear();
+        curs_set(0);
+        erase();
         mvprintw(0,0,"Suspicious tags in archive (ESC/q to return, CTRL+f to filter)");
+        size_t visible_count = 0;
+        for (size_t i = 0; i < match_count; i++) {
+            if (filter[0] && !strstr(matches[i], filter)) continue;
+            visible_count++;
+        }
+
+        // Ограничиваем top_line, чтобы не выйти за конец
+        if ((size_t)top_line > visible_count - 1) top_line = visible_count > 0 ? visible_count - 1 : 0;
 
         int screen_row=1, displayed=0;
         for (size_t i=0;i<match_count;i++) {
@@ -451,6 +477,7 @@ static void display_matches_with_filter(char **matches, size_t match_count) {
             }
             displayed++;
         }
+
 
         if (filter[0]) mvprintw(LINES-1,0,"Filter: %s",filter);
         refresh();
@@ -464,7 +491,9 @@ static void display_matches_with_filter(char **matches, size_t match_count) {
                 noecho(); curs_set(0);
                 top_line=0;
                 break;
-            case KEY_DOWN: top_line++; break;
+            case KEY_DOWN:
+                if ((size_t)(top_line + (LINES-2)) < visible_count) top_line++;
+                break;
             case KEY_UP: if(top_line>0) top_line--; break;
         }
     } while(ch != KEY_ESC && ch != 'q');
